@@ -1,0 +1,447 @@
+name: Deploy Dragonfly cluster to Bare Metal
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dragonfly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PRIMARY_HOST: ${{ vars.PRIMARY_HOST }}
+  REPLICA_HOST: ${{ vars.REPLICA_HOST }}
+  SENTINEL_HOST: ${{ vars.SENTINEL_HOST }}
+
+jobs:
+
+  deploy-primary:
+    name: Deploy Dragonfly Primary
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set cluster variables
+        id: cluster_vars
+        run: |
+            echo "primary_host=${PRIMARY_HOST}" >> $GITHUB_OUTPUT
+            echo "replica_host=${REPLICA_HOST}" >> $GITHUB_OUTPUT
+            echo "sentinel_host=${SENTINEL_HOST}" >> $GITHUB_OUTPUT
+      
+      - name: Display selected cluster info
+        run: |
+          echo "Deploying dragonfly cluster"
+          echo "Primary Host: ${{ steps.cluster_vars.outputs.primary_host }}"
+          echo "Target: ${{ github.event.inputs.target }}"
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          ssh-keyscan -H ${{ steps.cluster_vars.outputs.primary_host }} >> ~/.ssh/known_hosts
+      
+      - name: Check server connectivity
+        run: |
+          ssh -o ConnectTimeout=10 naitik@${{ steps.cluster_vars.outputs.primary_host }} "echo 'Server connection successful'"
+
+      - name: Sync deployment files to server
+        run: |
+          # Sync docker-compose.primary.yml to remote server
+          rsync -avz --delete \
+            ./deploy/docker-compose.primary.yml \
+            naitik@${{ steps.cluster_vars.outputs.primary_host }}:/home/naitik/yral-redis-store/
+
+          # Fix permissions on the server
+          ssh naitik@${{ steps.cluster_vars.outputs.primary_host }} << 'EOF'
+            chmod 755 /home/naitik/yral-redis-store/certs
+            chmod 644 /home/naitik/yral-redis-store/certs/*-cert.pem
+            chmod 644 /home/naitik/yral-redis-store/certs/*-key.pem
+            ls -la /home/naitik/yral-redis-store/certs/
+          EOF
+
+      - name: Create .env file on primary server
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.primary_host }} \
+            "cat > /home/naitik/yral-redis-store/.env <<EOF
+            DRAGONFLY_PASSWORD=${{ secrets.DRAGONFLY_PASSWORD }}
+            PRIMARY_HOST=${{ steps.cluster_vars.outputs.primary_host }}
+            CURRENT_HOST=${{ steps.cluster_vars.outputs.primary_host }}
+            NAITIK_S3_ACCESS_KEY=${{ secrets.NAITIK_S3_ACCESS_KEY }}
+            NAITIK_S3_SECRET_KEY=${{ secrets.NAITIK_S3_SECRET_KEY }}
+            NAITIK_S3_REGION=${{ secrets.NAITIK_S3_REGION }}
+            EOF"
+      
+      - name: Deploy Dragonfly Primary
+        env:
+          DRAGONFLY_PASSWORD: ${{ secrets.DRAGONFLY_PASSWORD }}
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.primary_host }} << 'EOF'
+            cd /home/naitik/yral-redis-store
+            
+            # Pull latest image
+            docker compose -f docker-compose.primary.yml pull
+            
+            # Deploy with zero downtime
+            docker compose -f docker-compose.primary.yml up -d --remove-orphans
+
+            # Wait for health check
+            echo "Waiting for Dragonfly to be healthy..."
+            timeout 60 sh -c 'until docker compose -f docker-compose.primary.yml ps | grep -q "healthy"; do sleep 2; done'
+            
+            # Show status
+            docker compose -f docker-compose.primary.yml ps
+            docker compose -f docker-compose.primary.yml logs --tail=50
+          EOF
+
+      - name: Verify primary deployment with mTLS
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.primary_host }} << 'EOF'
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              ping
+          EOF
+
+  deploy-replica:
+    name: Deploy Dragonfly Replica
+    runs-on: ubuntu-latest
+    needs: deploy-primary
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set cluster variables
+        id: cluster_vars
+        run: |
+            echo "primary_host=${PRIMARY_HOST}" >> $GITHUB_OUTPUT
+            echo "replica_host=${REPLICA_HOST}" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          ssh-keyscan -H ${{ steps.cluster_vars.outputs.replica_host }} >> ~/.ssh/known_hosts
+      
+      - name: Check server connectivity
+        run: |
+          ssh -o ConnectTimeout=10 naitik@${{ steps.cluster_vars.outputs.replica_host }} "echo 'Server connection successful'"
+
+      - name: Sync deployment files to server
+        run: |
+          # Sync docker-compose.replica.yml to remote server
+          rsync -avz --delete \
+            ./deploy/docker-compose.replica.yml \
+            naitik@${{ steps.cluster_vars.outputs.replica_host }}:/home/naitik/yral-redis-store/
+
+          # Fix permissions on the server
+          ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} << 'EOF'
+            chmod 755 /home/naitik/yral-redis-store/certs
+            chmod 644 /home/naitik/yral-redis-store/certs/*-cert.pem
+            chmod 644 /home/naitik/yral-redis-store/certs/*-key.pem
+            ls -la /home/naitik/yral-redis-store/certs/
+          EOF
+
+      - name: Create .env file on replica server
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} "cat > /home/naitik/yral-redis-store/.env <<EOF
+          DRAGONFLY_PASSWORD=${{ secrets.DRAGONFLY_PASSWORD }}
+          PRIMARY_HOST=${{ steps.cluster_vars.outputs.primary_host }}
+          CURRENT_HOST=${{ steps.cluster_vars.outputs.replica_host }}
+          NAITIK_S3_ACCESS_KEY=${{ secrets.NAITIK_S3_ACCESS_KEY }}
+          NAITIK_S3_SECRET_KEY=${{ secrets.NAITIK_S3_SECRET_KEY }}
+          NAITIK_S3_REGION=${{ secrets.NAITIK_S3_REGION }}
+          EOF"
+
+      - name: Deploy Dragonfly Replica
+        env:
+            DRAGONFLY_PASSWORD: ${{ secrets.DRAGONFLY_PASSWORD }}
+            PRIMARY_HOST: ${{ steps.cluster_vars.outputs.primary_host }}
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} << 'EOF'
+            cd /home/naitik/yral-redis-store
+            
+            # Pull latest image
+            docker compose -f docker-compose.replica.yml pull
+            
+            # Deploy
+            docker compose -f docker-compose.replica.yml up -d --remove-orphans
+
+            # Wait for health check
+            echo "Waiting for Dragonfly to be healthy..."
+            timeout 60 sh -c 'until docker compose -f docker-compose.replica.yml ps | grep -q "healthy"; do sleep 2; done'
+            
+            # Show status
+            docker compose -f docker-compose.replica.yml ps
+            docker compose -f docker-compose.replica.yml logs --tail=50
+          EOF
+
+      - name: Verify replica deployment with mTLS
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} << 'EOF'
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              ping
+          EOF
+
+      - name: Check replication status
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} << 'EOF'
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              INFO replication
+          EOF
+
+      - name: Check Sentinel Status
+        run: |
+           ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} << 'EOF'
+            # Check if sentinel sees the master
+            docker exec yral-redis-store-sentinel redis-cli \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 26379 \
+              SENTINEL master mymaster
+
+            docker exec yral-redis-store-sentinel redis-cli \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 26379 \
+              SENTINEL sentinels mymaster
+           EOF
+
+  deploy-sentinel-only:
+    name: Deploy Dragonfly Sentinel Only node
+    runs-on: ubuntu-latest
+    needs: deploy-primary
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set cluster variables
+        id: cluster_vars
+        run: |
+            echo "primary_host=${PRIMARY_HOST}" >> $GITHUB_OUTPUT
+            echo "replica_host=${REPLICA_HOST}" >> $GITHUB_OUTPUT
+            echo "sentinel_host=${SENTINEL_HOST}" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          ssh-keyscan -H ${{ steps.cluster_vars.outputs.sentinel_host }} >> ~/.ssh/known_hosts
+      
+      - name: Check server connectivity
+        run: |
+          ssh -o ConnectTimeout=10 naitik@${{ steps.cluster_vars.outputs.sentinel_host }} "echo 'Server connection successful'"
+
+      - name: Sync deployment files to server
+        run: |
+          # Sync docker-compose.sentinel.yml to remote server
+          rsync -avz --delete \
+            ./deploy/docker-compose.sentinel.yml \
+            naitik@${{ steps.cluster_vars.outputs.sentinel_host }}:/home/naitik/yral-redis-store/
+
+          # Fix permissions on the server
+          ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
+            chmod 755 /home/naitik/yral-redis-store/certs
+            chmod 644 /home/naitik/yral-redis-store/certs/*-cert.pem
+            chmod 644 /home/naitik/yral-redis-store/certs/*-key.pem
+            ls -la /home/naitik/yral-redis-store/certs/
+          EOF
+
+      - name: Create .env file on replica server
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} "cat > /home/naitik/yral-redis-store/.env <<EOF
+          DRAGONFLY_PASSWORD=${{ secrets.DRAGONFLY_PASSWORD }}
+          PRIMARY_HOST=${{ steps.cluster_vars.outputs.primary_host }}
+          REPLICA_HOST=${{ steps.cluster_vars.outputs.replica_host }}
+          CURRENT_HOST=${{ steps.cluster_vars.outputs.sentinel_host }}
+          EOF"
+
+      - name: Deploy Dragonfly Sentinel Only node
+        env:
+            DRAGONFLY_PASSWORD: ${{ secrets.DRAGONFLY_PASSWORD }}
+            PRIMARY_HOST: ${{ steps.cluster_vars.outputs.primary_host }}
+        run: |
+          ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
+            cd /home/naitik/yral-redis-store
+            
+            # Pull latest image
+            docker compose -f docker-compose.sentinel.yml pull
+            
+            # Deploy
+            docker compose -f docker-compose.sentinel.yml up -d --remove-orphans
+
+            # Wait for health check
+            echo "Waiting for Dragonfly to be healthy..."
+            timeout 60 sh -c 'until docker compose -f docker-compose.sentinel.yml ps | grep -q "healthy"; do sleep 2; done'
+            
+            # Show status
+            docker compose -f docker-compose.sentinel.yml ps
+            docker compose -f docker-compose.sentinel.yml logs --tail=50
+          EOF
+
+
+      - name: Check Sentinel Status
+        run: |
+           ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
+            # Check if sentinel sees the master
+            docker exec yral-redis-store-sentinel redis-cli \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 26379 \
+              SENTINEL master mymaster
+
+            docker exec yral-redis-store-sentinel redis-cli \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 26379 \
+              SENTINEL sentinels mymaster
+           EOF
+
+  health-check:
+    name: Post-Deployment Health Check
+    runs-on: ubuntu-latest
+    needs: [deploy-primary, deploy-replica, deploy-sentinel-only]
+    if: always() && (needs.deploy-primary.result == 'success' || needs.deploy-replica.result == 'success')
+
+    steps:
+      - name: Set cluster variables
+        id: cluster_vars
+        run: |
+            echo "primary_host=${PRIMARY_HOST}" >> $GITHUB_OUTPUT
+            echo "replica_host=${REPLICA_HOST}" >> $GITHUB_OUTPUT
+            echo "sentinel_host=${SENTINEL_HOST}" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Add servers to known hosts
+        run: |
+          ssh-keyscan -H ${{ steps.cluster_vars.outputs.primary_host }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ steps.cluster_vars.outputs.replica_host }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ steps.cluster_vars.outputs.sentinel_host }} >> ~/.ssh/known_hosts
+
+
+      - name: Check primary health
+        if: needs.deploy-primary.result == 'success'
+        run: |
+          echo "=== Primary Health Check ==="
+          echo "Host: ${{ steps.cluster_vars.outputs.primary_host }}"
+          ssh naitik@${{ steps.cluster_vars.outputs.primary_host }} << 'EOF'
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              --no-auth-warning INFO server | grep uptime_in_seconds
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              --no-auth-warning DBSIZE
+          EOF
+
+      - name: Check replica health
+        if: needs.deploy-replica.result == 'success'
+        run: |
+          echo "=== Replica-1 Health Check ==="
+          echo "Host: ${{ steps.cluster_vars.outputs.replica_host }}"
+          ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} << 'EOF'
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              --no-auth-warning INFO server | grep uptime_in_seconds
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              --no-auth-warning INFO replication | grep -E "role|master_host|master_link_status"
+            docker exec yral-redis-store redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 6380 \
+              --no-auth-warning DBSIZE
+          EOF
+
+      - name: Check Sentinel health
+        if: needs.deploy-sentinel-only.result == 'success'
+        run: |
+          echo "=== Sentinel Health Check ==="
+          echo "Host: ${{ steps.cluster_vars.outputs.sentinel_host }}"
+          ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
+            docker exec yral-redis-store-sentinel redis-cli \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
+              --tls \
+              --cert /etc/yral-redis-store/certs/client-cert.pem \
+              --key /etc/yral-redis-store/certs/client-key.pem \
+              --cacert /etc/yral-redis-store/certs/ca-cert.pem \
+              -p 26379 \
+              SENTINEL sentinels mymaster
+          EOF
+
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo "================================"
+          echo "Deployment Successful"
+          echo "================================"
+          echo ""
+          echo "Cluster Status:"
+          echo "Primary Status: ${{ needs.deploy-primary.result }}"
+          echo "Replicas Status: ${{ needs.deploy-replica.result }}"
+          echo ""
+          echo "Connection Info:"
+          echo "- Port: 6380 (Dragonfly native mTLS)"
+          echo "- Client certificate required for all connections"
+          echo ""
