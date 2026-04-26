@@ -2,9 +2,6 @@ name: Deploy Dragonfly cluster to Bare Metal
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - naitik/initial-setup
 
 concurrency:
   group: deploy-dragonfly-${{ github.ref }}
