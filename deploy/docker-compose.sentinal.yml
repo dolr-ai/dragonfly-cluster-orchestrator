@@ -6,9 +6,9 @@ x-logging: &default-logging
     tag: "{{.Name}}"
 
 services:
-  sentinel:
+  yral-redis-store-sentinel:
     image: redis:7.2-alpine
-    container_name: sentinel
+    container_name: yral-redis-store-sentinel
     ports:
       - "26379:26379"
     environment:
@@ -17,9 +17,9 @@ services:
       - CURRENT_HOST=${CURRENT_HOST}
     volumes:
       - sentinel_data:/data
-      - /home/certs:/etc/dragonfly/certs:ro
+      - /home/naitik/yral-redis-store/certs:/etc/yral-redis-store/certs:ro
     networks:
-      - dragonfly_network
+      - proxy
     logging: *default-logging
     restart: unless-stopped
     # Sentinel startup script to handle config generation and TLS
@@ -39,9 +39,9 @@ services:
         echo 'sentinel failover-timeout mymaster 60000' >> /data/sentinel.conf
         echo 'sentinel parallel-syncs mymaster 1' >> /data/sentinel.conf
         echo 'tls-replication yes' >> /data/sentinel.conf
-        echo 'tls-cert-file /etc/dragonfly/certs/server-cert.pem' >> /data/sentinel.conf
-        echo 'tls-key-file /etc/dragonfly/certs/server-key.pem' >> /data/sentinel.conf
-        echo 'tls-ca-cert-file /etc/dragonfly/certs/ca-cert.pem' >> /data/sentinel.conf
+        echo 'tls-cert-file /etc/yral-redis-store/certs/server-cert.pem' >> /data/sentinel.conf
+        echo 'tls-key-file /etc/yral-redis-store/certs/server-key.pem' >> /data/sentinel.conf
+        echo 'tls-ca-cert-file /etc/yral-redis-store/certs/ca-cert.pem' >> /data/sentinel.conf
         echo 'tls-auth-clients yes' >> /data/sentinel.conf
         echo 'tcp-keepalive 60' >> /data/sentinel.conf
         redis-server /data/sentinel.conf --sentinel
@@ -53,5 +53,5 @@ volumes:
     driver: local
 
 networks:
-  dragonfly_network:
-    driver: bridge
+  proxy:
+    external: true
