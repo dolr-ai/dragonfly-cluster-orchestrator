@@ -18,10 +18,12 @@ services:
       - --replicaof=${PRIMARY_HOST}:6380
       - --bind=0.0.0.0
       - --port=6380
-      - --dir=/data
+      - --dir=s3://naitik-yral/yral-redis-store/
+      - --s3_endpoint=hel1.your-objectstorage.com
+      - --s3_use_https=true
+      - --s3_sign_payload=false
       - --dbfilename=dump
       - --snapshot_cron=0 */6 * * *  # Snapshot every 6 hours
-      - --cache_mode=true
       - --proactor_threads=8
       - --primary_port_http_enabled=true
       - --logtostderr
@@ -35,9 +37,14 @@ services:
       - --tcp_keepalive=60
       - --timeout=0
       - --maxclients=10000
+      - --maxmemory=16gb
     environment:
       - DRAGONFLY_PASSWORD=${DRAGONFLY_PASSWORD}
       - PRIMARY_HOST=${PRIMARY_HOST}
+      # S3 credentials
+      - AWS_ACCESS_KEY_ID=${NAITIK_S3_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${NAITIK_S3_SECRET_KEY}
+      - AWS_DEFAULT_REGION=${NAITIK_S3_REGION}
     volumes:
       - dragonfly_data:/data
       - /home/naitik/yral-redis-store/certs:/etc/yral-redis-store/certs:ro
