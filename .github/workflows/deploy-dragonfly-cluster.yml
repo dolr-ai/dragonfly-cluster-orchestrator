@@ -251,6 +251,7 @@ jobs:
         run: |
             echo "primary_host=${PRIMARY_HOST}" >> $GITHUB_OUTPUT
             echo "replica_host=${REPLICA_HOST}" >> $GITHUB_OUTPUT
+            echo "sentinel_host=${SENTINEL_HOST}" >> $GITHUB_OUTPUT
 
       - name: Setup SSH key
         uses: webfactory/ssh-agent@v0.9.0
@@ -259,21 +260,21 @@ jobs:
 
       - name: Add server to known hosts
         run: |
-          ssh-keyscan -H ${{ vars.SENTINEL_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H {{ steps.cluster_vars.outputs.sentinel_host }} >> ~/.ssh/known_hosts
       
       - name: Check server connectivity
         run: |
-          ssh -o ConnectTimeout=10 ${{ vars.SENTINEL_HOST }} "echo 'Server connection successful'"
+          ssh -o ConnectTimeout=10 naitik@${{ steps.cluster_vars.outputs.sentinel_host }} "echo 'Server connection successful'"
 
       - name: Sync deployment files to server
         run: |
-          # Sync docker-compose.replica.yml to remote server
+          # Sync docker-compose.sentinel.yml to remote server
           rsync -avz --delete \
-            ./deploy/docker-compose.sentinal.yml \
+            ./deploy/docker-compose.sentinel.yml \
             naitik@${{ steps.cluster_vars.outputs.sentinel_host }}:/home/naitik/master-dragonfly/
 
           # Fix permissions on the server
-          ssh naitik@${{ vars.SENTINEL_HOST }} << 'EOF'
+          ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
             chmod 755 /home/naitik/yral-redis-store/certs
             chmod 644 /home/naitik/yral-redis-store/certs/*-cert.pem
             chmod 644 /home/naitik/yral-redis-store/certs/*-key.pem
@@ -282,11 +283,11 @@ jobs:
 
       - name: Create .env file on replica server
         run: |
-          ssh naitik@${{ vars.SENTINEL_HOST }} "cat > /home/naitik/yral-redis-store/.env <<EOF
+          ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} "cat > /home/naitik/yral-redis-store/.env <<EOF
           DRAGONFLY_PASSWORD=${{ secrets.DRAGONFLY_PASSWORD }}
           PRIMARY_HOST=${{ steps.cluster_vars.outputs.primary_host }}
           REPLICA_HOST=${{ steps.cluster_vars.outputs.replica_host }}
-          CURRENT_HOST=${{ vars.SENTINEL_HOST }}
+          CURRENT_HOST=${{ steps.cluster_vars.outputs.sentinel_host }}
           EOF"
 
       - name: Deploy Dragonfly Sentinel Only node
@@ -294,7 +295,7 @@ jobs:
             DRAGONFLY_PASSWORD: ${{ secrets.DRAGONFLY_PASSWORD }}
             PRIMARY_HOST: ${{ steps.cluster_vars.outputs.primary_host }}
         run: |
-          ssh naitik@${{ vars.SENTINEL_HOST }} << 'EOF'
+          ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
             cd /home/naitik/yral-redis-store
             
             # Pull latest image
@@ -315,7 +316,7 @@ jobs:
 
       - name: Check Sentinel Status
         run: |
-           ssh naitik@${{ vars.SENTINEL_HOST }} << 'EOF'
+           ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
             # Check if sentinel sees the master
             docker exec yral-redis-store-sentinel redis-cli \
               --tls \
