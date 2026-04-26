@@ -271,7 +271,7 @@ jobs:
           # Sync docker-compose.sentinel.yml to remote server
           rsync -avz --delete \
             ./deploy/docker-compose.sentinel.yml \
-            naitik@${{ steps.cluster_vars.outputs.sentinel_host }}:/home/naitik/master-dragonfly/
+            naitik@${{ steps.cluster_vars.outputs.sentinel_host }}:/home/naitik/yral-redis-store/
 
           # Fix permissions on the server
           ssh naitik@${{ steps.cluster_vars.outputs.sentinel_host }} << 'EOF'
