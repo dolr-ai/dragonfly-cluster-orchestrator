@@ -73,7 +73,7 @@ jobs:
             DRAGONFLY_PASSWORD=${{ secrets.DRAGONFLY_PASSWORD }}
             PRIMARY_HOST=${{ steps.cluster_vars.outputs.primary_host }}
             CURRENT_HOST=${{ steps.cluster_vars.outputs.primary_host }}
-            NAITIK_S3_ACCESS_KEY{{ secrets.NAITIK_S3_ACCESS_KEY }}
+            NAITIK_S3_ACCESS_KEY=${{ secrets.NAITIK_S3_ACCESS_KEY }}
             NAITIK_S3_SECRET_KEY=${{ secrets.NAITIK_S3_SECRET_KEY }}
             NAITIK_S3_REGION=${{ secrets.NAITIK_S3_REGION }}
             EOF"
@@ -162,7 +162,7 @@ jobs:
           DRAGONFLY_PASSWORD=${{ secrets.DRAGONFLY_PASSWORD }}
           PRIMARY_HOST=${{ steps.cluster_vars.outputs.primary_host }}
           CURRENT_HOST=${{ steps.cluster_vars.outputs.replica_host }}
-          NAITIK_S3_ACCESS_KEY{{ secrets.NAITIK_S3_ACCESS_KEY }}
+          NAITIK_S3_ACCESS_KEY=${{ secrets.NAITIK_S3_ACCESS_KEY }}
           NAITIK_S3_SECRET_KEY=${{ secrets.NAITIK_S3_SECRET_KEY }}
           NAITIK_S3_REGION=${{ secrets.NAITIK_S3_REGION }}
           EOF"
@@ -286,7 +286,7 @@ jobs:
           DRAGONFLY_PASSWORD=${{ secrets.DRAGONFLY_PASSWORD }}
           PRIMARY_HOST=${{ steps.cluster_vars.outputs.primary_host }}
           REPLICA_HOST=${{ steps.cluster_vars.outputs.replica_host }}
-          CURRENT_HOST=${vars.SENTINEL_HOST}
+          CURRENT_HOST=${{ vars.SENTINEL_HOST }}
           EOF"
 
       - name: Deploy Dragonfly Sentinel Only node
