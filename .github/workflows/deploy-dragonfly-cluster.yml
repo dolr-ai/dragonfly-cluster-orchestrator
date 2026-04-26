@@ -375,14 +375,14 @@ jobs:
               --no-auth-warning DBSIZE
           EOF
 
-      - name: Check replica 1 health
+      - name: Check replica health
         if: needs.deploy-replica.result == 'success'
         run: |
           echo "=== Replica-1 Health Check (cluster-1) ==="
           echo "Host: ${{ steps.cluster_vars.outputs.replica_host_1 }}"
           ssh root@${{ steps.cluster_vars.outputs.replica_host_1 }} << 'EOF'
             docker exec dragonfly redis-cli \
-              -a ${{ secrets.DRAGONFLY_PASSWORD_CLUSTER_1 }} \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
               --tls \
               --cert /etc/dragonfly/certs/client-cert.pem \
               --key /etc/dragonfly/certs/client-key.pem \
@@ -390,7 +390,7 @@ jobs:
               -p 6380 \
               --no-auth-warning INFO server | grep uptime_in_seconds
             docker exec dragonfly redis-cli \
-              -a ${{ secrets.DRAGONFLY_PASSWORD_CLUSTER_1 }} \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
               --tls \
               --cert /etc/dragonfly/certs/client-cert.pem \
               --key /etc/dragonfly/certs/client-key.pem \
@@ -398,7 +398,7 @@ jobs:
               -p 6380 \
               --no-auth-warning INFO replication | grep -E "role|master_host|master_link_status"
             docker exec dragonfly redis-cli \
-              -a ${{ secrets.DRAGONFLY_PASSWORD_CLUSTER_1 }} \
+              -a ${{ secrets.DRAGONFLY_PASSWORD }} \
               --tls \
               --cert /etc/dragonfly/certs/client-cert.pem \
               --key /etc/dragonfly/certs/client-key.pem \
@@ -430,7 +430,7 @@ jobs:
           echo "Deployment Successful"
           echo "================================"
           echo ""
-          echo "Cluster: cluster-1"
+          echo "Cluster Status:"
           echo "Primary Status: ${{ needs.deploy-primary.result }}"
           echo "Replicas Status: ${{ needs.deploy-replica.result }}"
           echo ""

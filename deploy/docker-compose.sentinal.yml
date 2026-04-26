@@ -9,8 +9,6 @@ services:
   sentinel:
     image: redis:7.2-alpine
     container_name: sentinel
-    depends_on:
-      - dragonfly
     ports:
       - "26379:26379"
     environment:
