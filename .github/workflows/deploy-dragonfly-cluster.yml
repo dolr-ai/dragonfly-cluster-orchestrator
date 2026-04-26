@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - initial-setup
+      - naitik/initial-setup
 
 concurrency:
   group: deploy-dragonfly-${{ github.ref }}
