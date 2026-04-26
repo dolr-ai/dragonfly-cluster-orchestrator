@@ -2,6 +2,9 @@ name: Deploy Dragonfly to Bare Metal (cluster-1)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - initial-setup
 
 concurrency:
   group: deploy-dragonfly-${{ github.ref }}
