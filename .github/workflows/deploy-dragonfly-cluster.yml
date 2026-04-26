@@ -260,7 +260,7 @@ jobs:
 
       - name: Add server to known hosts
         run: |
-          ssh-keyscan -H {{ steps.cluster_vars.outputs.sentinel_host }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ steps.cluster_vars.outputs.sentinel_host }} >> ~/.ssh/known_hosts
       
       - name: Check server connectivity
         run: |
