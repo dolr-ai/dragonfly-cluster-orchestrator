@@ -388,9 +388,9 @@ jobs:
       - name: Check replica health
         if: needs.deploy-replica.result == 'success'
         run: |
-          echo "=== Replica-1 Health Check (cluster-1) ==="
-          echo "Host: ${{ steps.cluster_vars.outputs.replica_host_1 }}"
-          ssh naitik@${{ steps.cluster_vars.outputs.replica_host_1 }} << 'EOF'
+          echo "=== Replica-1 Health Check ==="
+          echo "Host: ${{ steps.cluster_vars.outputs.replica_host }}"
+          ssh naitik@${{ steps.cluster_vars.outputs.replica_host }} << 'EOF'
             docker exec yral-redis-store redis-cli \
               -a ${{ secrets.DRAGONFLY_PASSWORD }} \
               --tls \
